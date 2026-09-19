@@ -1,0 +1,5 @@
+Place your RNBO Web Export JSON here and rename it to:
+
+patch.export.json
+
+The actual RNBO export cannot be generated without your Max patch.

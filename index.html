@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bird Slow — Xeno-canto × RNBO</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>Bird Slow</h1>
+      <p class="subtitle">Xeno-canto → RNBO</p>
+    </header>
+
+    <section class="panel">
+      <div class="row">
+        <button id="startButton" class="primary">Start audio</button>
+        <button id="newBirdButton" disabled>Random bird</button>
+        <span id="status" class="status">Chargement…</span>
+      </div>
+
+      <div class="bird-card">
+        <div class="bird-title" id="birdName">—</div>
+        <div id="birdEnglish">—</div>
+        <div id="birdMeta">—</div>
+        <a id="birdLink" href="#" target="_blank" rel="noopener">Voir l'enregistrement Xeno-canto</a>
+      </div>
+
+      <div class="control">
+        <label for="slowdown">
+          Vitesse
+          <output id="slowdownValue">0.25×</output>
+        </label>
+        <input id="slowdown" type="range" min="0.05" max="1" step="0.01" value="0.25">
+      </div>
+
+      <div id="params" class="params">
+        <h2>Paramètres RNBO</h2>
+        <p class="muted">Les paramètres exposés par ton patch apparaîtront ici.</p>
+      </div>
+
+      <details>
+        <summary>Configuration / diagnostic</summary>
+        <pre id="diagnostics"></pre>
+      </details>
+    </section>
+
+    <footer>
+      <span>Audio : Xeno-canto</span>
+      <span>DSP : RNBO</span>
+    </footer>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="https://cdn.cycling74.com/rnbo/latest/rnbo.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
