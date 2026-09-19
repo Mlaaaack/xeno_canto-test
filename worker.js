@@ -1,32 +1,33 @@
 /*
- * OPTIONAL CLOUDFLARE WORKER
+ * Cloudflare Worker for Bird Slow
  *
- * GitHub Pages is static, so it cannot safely hide a Xeno-canto API key.
- * If you want a public site, deploy this Worker and store your Xeno-canto
- * key as a Worker secret named XENO_API_KEY.
+ * Store the Xeno-canto API key as a Worker secret:
+ *
+ *   XENO_API_KEY
  *
  * Routes:
  *   /api?query=grp%3Abirds%20type%3Asong&page=1
  *   /audio?url=https%3A%2F%2Fxeno-canto.org%2F...
- *
- * Then set in config.js:
- *
- *   XENO_API_PROXY: "https://YOUR-WORKER.workers.dev/api"
- *   AUDIO_PROXY: "https://YOUR-WORKER.workers.dev/audio?url="
  */
+
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type"
+};
+
+function responseWithCors(body, init = {}) {
+  const headers = new Headers(init.headers || {});
+  for (const [k, v] of Object.entries(cors)) headers.set(k, v);
+  return new Response(body, { ...init, headers });
+}
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    const cors = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type"
-    };
-
     if (request.method === "OPTIONS") {
-      return new Response("", { headers: cors });
+      return responseWithCors("");
     }
 
     if (url.pathname === "/api") {
@@ -34,10 +35,14 @@ export default {
       const page = url.searchParams.get("page") || "1";
 
       if (!query) {
-        return new Response("Missing query", {
-          status: 400,
-          headers: cors
-        });
+        return responseWithCors("Missing query", { status: 400 });
+      }
+
+      if (!env.XENO_API_KEY) {
+        return responseWithCors(
+          "XENO_API_KEY is not configured on the Worker",
+          { status: 500 }
+        );
       }
 
       const target = new URL(
@@ -50,10 +55,9 @@ export default {
 
       const response = await fetch(target.toString());
 
-      return new Response(response.body, {
+      return responseWithCors(response.body, {
         status: response.status,
         headers: {
-          ...cors,
           "Content-Type":
             response.headers.get("Content-Type") ||
             "application/json"
@@ -65,42 +69,48 @@ export default {
       const audioUrl = url.searchParams.get("url");
 
       if (!audioUrl) {
-        return new Response("Missing url", {
-          status: 400,
-          headers: cors
-        });
+        return responseWithCors("Missing url", { status: 400 });
       }
 
-      const target = new URL(audioUrl);
+      let target;
+      try {
+        target = new URL(audioUrl);
+      } catch (_) {
+        return responseWithCors("Invalid url", { status: 400 });
+      }
 
-      // Security: only allow Xeno-canto hosts.
+      // Only allow Xeno-canto audio hosts.
       if (
         target.hostname !== "xeno-canto.org" &&
         target.hostname !== "www.xeno-canto.org"
       ) {
-        return new Response("Host not allowed", {
-          status: 403,
-          headers: cors
-        });
+        return responseWithCors("Host not allowed", { status: 403 });
       }
+
+      if (!env.XENO_API_KEY) {
+        return responseWithCors(
+          "XENO_API_KEY is not configured on the Worker",
+          { status: 500 }
+        );
+      }
+
+      // Xeno-canto requires the API key for recording downloads.
+      target.searchParams.set("key", env.XENO_API_KEY);
 
       const response = await fetch(target.toString());
 
-      const headers = new Headers(cors);
-      headers.set(
-        "Content-Type",
-        response.headers.get("Content-Type") || "audio/mpeg"
-      );
-
-      return new Response(response.body, {
+      return responseWithCors(response.body, {
         status: response.status,
-        headers
+        headers: {
+          "Content-Type":
+            response.headers.get("Content-Type") ||
+            "audio/mpeg"
+        }
       });
     }
 
-    return new Response(
-      "Bird Slow proxy. Use /api or /audio.",
-      { headers: cors }
+    return responseWithCors(
+      "Bird Slow proxy. Use /api or /audio."
     );
   }
 };

@@ -15,9 +15,9 @@
 
     <section class="panel">
       <div class="row">
-        <button id="startButton" class="primary">Start audio</button>
-        <button id="newBirdButton" disabled>Random bird</button>
-        <span id="status" class="status">Chargement…</span>
+        <button id="startButton" class="primary">Activer l'audio</button>
+        <button id="newBirdButton" disabled>Nouvel oiseau</button>
+        <span id="status" class="status">Chargement de RNBO…</span>
       </div>
 
       <div class="bird-card">
@@ -30,30 +30,29 @@
       <div class="control">
         <label for="slowdown">
           Vitesse
-          <output id="slowdownValue">0.25×</output>
+          <output id="slowdownValue">0.30×</output>
         </label>
-        <input id="slowdown" type="range" min="0.05" max="1" step="0.01" value="0.25">
+        <input id="slowdown" type="range" min="0" max="2" step="0.01" value="0.3">
       </div>
 
       <div id="params" class="params">
         <h2>Paramètres RNBO</h2>
-        <p class="muted">Les paramètres exposés par ton patch apparaîtront ici.</p>
       </div>
 
       <details>
-        <summary>Configuration / diagnostic</summary>
+        <summary>Diagnostic</summary>
         <pre id="diagnostics"></pre>
       </details>
     </section>
 
     <footer>
       <span>Audio : Xeno-canto</span>
-      <span>DSP : RNBO</span>
+      <span>DSP : RNBO 1.2.6</span>
     </footer>
   </main>
 
   <script src="config.js"></script>
-  <script src="https://cdn.cycling74.com/rnbo/latest/rnbo.min.js"></script>
+  <script src="https://cdn.cycling74.com/rnbo/1.2.6/rnbo.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

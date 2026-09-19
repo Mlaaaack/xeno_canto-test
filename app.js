@@ -5,10 +5,10 @@
 
   let audioContext = null;
   let device = null;
+  let apiKey = "";
   let currentRecording = null;
-  let currentAudioBuffer = null;
 
-  const $ = (id) => document.getElementById(id);
+  const $ = id => document.getElementById(id);
 
   const els = {
     start: $("startButton"),
@@ -29,8 +29,9 @@
     els.status.className = "status " + kind;
   }
 
-  function logDiagnostic(message) {
+  function log(message) {
     els.diagnostics.textContent += message + "\n";
+    console.log("[Bird Slow]", message);
   }
 
   function absoluteUrl(url) {
@@ -38,9 +39,15 @@
     return url.startsWith("//") ? "https:" + url : url;
   }
 
-  function proxiedAudioUrl(url) {
-    if (!CFG.AUDIO_PROXY) return url;
-    return CFG.AUDIO_PROXY + encodeURIComponent(url);
+  function proxiedAudioUrl(rawUrl) {
+    if (!CFG.AUDIO_PROXY) {
+      const u = new URL(rawUrl);
+      // Direct mode only: the API key is exposed to the browser/network.
+      // For a public site, use AUDIO_PROXY instead.
+      if (apiKey) u.searchParams.set("key", apiKey);
+      return u.toString();
+    }
+    return CFG.AUDIO_PROXY + encodeURIComponent(rawUrl);
   }
 
   async function fetchJson(url) {
@@ -50,53 +57,58 @@
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error(`HTTP ${response.status} — ${body.slice(0, 300)}`);
+      throw new Error(`Xeno-canto HTTP ${response.status}: ${body.slice(0, 300)}`);
     }
 
     return response.json();
   }
 
-  function buildXenoUrl(query, page, key) {
+  function buildXenoUrl(query, page) {
     const params = new URLSearchParams();
     params.set("query", query);
     params.set("page", String(page));
 
-    if (key) params.set("key", key);
+    if (!CFG.XENO_API_PROXY && apiKey) {
+      params.set("key", apiKey);
+    }
 
     return CFG.XENO_API_PROXY
       ? CFG.XENO_API_PROXY + "?" + params.toString()
       : CFG.XENO_API_URL + "?" + params.toString();
   }
 
-  /*
-   * We choose a random page first, then a random recording on that page.
-   * If the page count is unknown or huge, we cap it.
-   *
-   * This does NOT download the recordings themselves. It only retrieves
-   * JSON metadata. The actual audio is fetched only for the selected item.
-   */
-  async function randomRecording() {
+  async function getApiKeyIfNeeded() {
+    if (CFG.XENO_API_PROXY) return "";
+
     const key = window.prompt(
-      "Clé API Xeno-canto (elle n'est pas enregistrée par cette page).\n\n" +
-      "Si tu utilises un proxy, laisse vide."
-    ) || "";
+      "Clé API Xeno-canto.\n\n" +
+      "Pour un site public, utilise plutôt le Worker Cloudflare fourni dans le projet."
+    );
+
+    if (!key) {
+      throw new Error("Aucune clé API Xeno-canto fournie.");
+    }
+
+    return key.trim();
+  }
+
+  async function randomRecording() {
+    apiKey = await getApiKeyIfNeeded();
 
     const query = CFG.XENO_QUERY;
     setStatus("Recherche Xeno-canto…");
 
-    const firstUrl = buildXenoUrl(query, 1, key);
-    const first = await fetchJson(firstUrl);
-
+    const first = await fetchJson(buildXenoUrl(query, 1));
     const numPages = Math.max(1, Number(first.numPages || 1));
     const maxPages = Math.min(numPages, CFG.RANDOM_MAX_PAGES);
     const page = 1 + Math.floor(Math.random() * maxPages);
 
     const data = page === 1
       ? first
-      : await fetchJson(buildXenoUrl(query, page, key));
+      : await fetchJson(buildXenoUrl(query, page));
 
-    if (!data.recordings || !data.recordings.length) {
-      throw new Error("Aucun enregistrement trouvé pour cette requête.");
+    if (!Array.isArray(data.recordings) || !data.recordings.length) {
+      throw new Error("Aucun enregistrement trouvé pour : " + query);
     }
 
     return data.recordings[
@@ -107,55 +119,63 @@
   function renderRecording(rec) {
     currentRecording = rec;
 
-    const scientific = [rec.gen, rec.sp, rec.ssp].filter(Boolean).join(" ");
+    const scientific = [rec.gen, rec.sp, rec.ssp]
+      .filter(Boolean)
+      .join(" ");
 
-    els.birdName.textContent =
-      scientific || rec.en || "Bird recording";
+    els.birdName.textContent = scientific || rec.en || "Bird recording";
+    els.birdEnglish.textContent = rec.en || "";
 
-    els.birdEnglish.textContent =
-      rec.en ? rec.en : "";
+    els.birdMeta.textContent = [
+      rec.type,
+      rec.cnt,
+      rec.loc,
+      rec.rec,
+      rec.length,
+      rec.q ? "quality " + rec.q : ""
+    ].filter(Boolean).join(" · ");
 
-    els.birdMeta.textContent =
-      [
-        rec.type,
-        rec.cnt,
-        rec.loc,
-        rec.rec,
-        rec.length,
-        rec.q ? "quality " + rec.q : ""
-      ].filter(Boolean).join(" · ");
-
-    const pageUrl = absoluteUrl(
+    els.birdLink.href = absoluteUrl(
       rec.url || ("//xeno-canto.org/" + rec.id)
     );
+    els.birdLink.textContent =
+      "Voir l'enregistrement Xeno-canto #" + rec.id;
 
-    els.birdLink.href = pageUrl;
-    els.birdLink.textContent = "Voir l'enregistrement Xeno-canto #" + rec.id;
+    log("Recording #" + rec.id);
+    log("Audio source: " + absoluteUrl(rec.file));
   }
 
   async function fetchAndDecodeRecording(rec) {
     const rawUrl = absoluteUrl(rec.file);
 
     if (!rawUrl) {
-      throw new Error("L'enregistrement ne fournit pas d'URL audio.");
+      throw new Error("Xeno-canto n'a fourni aucune URL audio.");
     }
 
     const url = proxiedAudioUrl(rawUrl);
-    logDiagnostic("Audio URL: " + url);
+    log("Fetching audio: " + url);
 
     const response = await fetch(url);
+
     if (!response.ok) {
+      const body = await response.text().catch(() => "");
       throw new Error(
-        `Impossible de récupérer l'audio (${response.status}). ` +
-        `Si le navigateur bloque CORS, utilise AUDIO_PROXY.`
+        `Téléchargement audio HTTP ${response.status}. ` +
+        (body ? body.slice(0, 160) : "")
       );
     }
 
-    const arrayBuffer = await response.arrayBuffer();
+    const contentType = response.headers.get("content-type") || "";
+    log("Audio Content-Type: " + contentType);
 
-    // Decode MP3/M4A/etc. dans le navigateur.
-    // Rien n'est écrit sur disque.
-    return await audioContext.decodeAudioData(arrayBuffer);
+    const bytes = await response.arrayBuffer();
+    log("Audio bytes: " + bytes.byteLength);
+
+    if (!bytes.byteLength) {
+      throw new Error("Le fichier audio téléchargé est vide.");
+    }
+
+    return audioContext.decodeAudioData(bytes);
   }
 
   async function loadRecordingIntoRNBO(audioBuffer) {
@@ -163,46 +183,47 @@
 
     const descriptions = device.dataBufferDescriptions || [];
 
-    if (!descriptions.length) {
-      throw new Error(
-        "Aucun DataBuffer exposé par ton export RNBO. " +
-        "Ajoute un [buffer~ bird] dans le patch."
-      );
-    }
+    log(
+      "DataBuffers: " +
+      (descriptions.length
+        ? descriptions.map(d => d.id).join(", ")
+        : "aucun")
+    );
 
-    let bufferId = CFG.RNBO_BUFFER_ID;
+    const bufferId = CFG.RNBO_BUFFER_ID || (
+      descriptions[0] && descriptions[0].id
+    );
 
     if (!bufferId) {
-      bufferId = descriptions[0].id;
+      throw new Error("Aucun DataBuffer RNBO disponible.");
     }
 
     const matching = descriptions.find(d => d.id === bufferId);
 
     if (!matching) {
       throw new Error(
-        `DataBuffer "${bufferId}" introuvable. Buffers disponibles : ` +
-        descriptions.map(d => d.id).join(", ")
+        `DataBuffer "${bufferId}" introuvable. ` +
+        `Disponibles: ${descriptions.map(d => d.id).join(", ")}`
       );
     }
 
-    logDiagnostic(
-      `RNBO DataBuffer: ${bufferId} | ` +
-      `${audioBuffer.numberOfChannels} ch | ` +
-      `${audioBuffer.sampleRate} Hz | ` +
+    log(
+      `setDataBuffer("${bufferId}") : ` +
+      `${audioBuffer.numberOfChannels} ch, ` +
+      `${audioBuffer.sampleRate} Hz, ` +
       `${audioBuffer.length} samples`
     );
 
-    /*
-     * RNBO.js fournit directement setDataBuffer(id, AudioBuffer).
-     * RNBO copie les données dans son propre buffer.
-     */
     await device.setDataBuffer(bufferId, audioBuffer);
 
     return bufferId;
   }
 
-  function parameterDisplayName(param) {
-    return param.name || param.id;
+  function formatValue(value) {
+    if (typeof value !== "number") return String(value);
+    if (Math.abs(value) >= 100) return value.toFixed(0);
+    if (Math.abs(value) >= 10) return value.toFixed(1);
+    return value.toFixed(2);
   }
 
   function createParameterUI(param) {
@@ -213,7 +234,7 @@
     const title = document.createElement("span");
     const output = document.createElement("output");
 
-    title.textContent = parameterDisplayName(param);
+    title.textContent = param.name || param.id;
     output.textContent = formatValue(param.value);
 
     label.appendChild(title);
@@ -221,16 +242,12 @@
 
     const input = document.createElement("input");
     input.type = "range";
-
-    /*
-     * RNBO Parameter fournit min/max/steps dans l'API exportée.
-     * Les valeurs de secours rendent l'UI robuste aux exports différents.
-     */
     input.min = Number.isFinite(param.min) ? param.min : 0;
     input.max = Number.isFinite(param.max) ? param.max : 1;
-    input.step = Number.isFinite(param.steps) && param.steps > 0
-      ? param.steps
-      : "any";
+    input.step =
+      Number.isFinite(param.steps) && param.steps > 0
+        ? param.steps
+        : "any";
     input.value = param.value;
 
     input.addEventListener("input", () => {
@@ -245,20 +262,13 @@
     return wrapper;
   }
 
-  function formatValue(value) {
-    if (typeof value !== "number") return String(value);
-    if (Math.abs(value) >= 100) return value.toFixed(0);
-    if (Math.abs(value) >= 10) return value.toFixed(1);
-    return value.toFixed(2);
-  }
-
   function renderParameters() {
     els.params.innerHTML = "<h2>Paramètres RNBO</h2>";
 
     if (!device || !device.parameters) {
       els.params.insertAdjacentHTML(
         "beforeend",
-        '<p class="muted">Aucun paramètre exposé.</p>'
+        '<p>Aucun paramètre exposé.</p>'
       );
       return;
     }
@@ -268,7 +278,7 @@
     if (!parameters.length) {
       els.params.insertAdjacentHTML(
         "beforeend",
-        '<p class="muted">Aucun paramètre exposé.</p>'
+        '<p>Aucun paramètre exposé.</p>'
       );
       return;
     }
@@ -278,10 +288,21 @@
     });
   }
 
-  async function initRNBO() {
-    setStatus("Chargement de RNBO…");
+  function sendBang(tag) {
+    if (!device) return;
 
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    // A MessageEvent without a numeric/list payload represents a bang.
+    const event = new RNBO.MessageEvent(RNBO.TimeNow, tag);
+    device.scheduleEvent(event);
+    log("Sent bang to RNBO inport: " + tag);
+  }
+
+  async function initRNBO() {
+    audioContext = new (
+      window.AudioContext || window.webkitAudioContext
+    )();
+
+    setStatus("Chargement de RNBO…");
 
     const response = await fetch(CFG.RNBO_PATCH_URL);
     if (!response.ok) {
@@ -292,9 +313,8 @@
 
     const patcher = await response.json();
 
-    logDiagnostic(
-      "RNBO patch chargé : " + CFG.RNBO_PATCH_URL
-    );
+    log("RNBO patch chargé.");
+    log("RNBO export version: " + CFG.RNBO_VERSION);
 
     device = await RNBO.createDevice({
       context: audioContext,
@@ -303,24 +323,34 @@
 
     device.node.connect(audioContext.destination);
 
-    const buffers = device.dataBufferDescriptions || [];
-    logDiagnostic(
-      "DataBuffers : " +
-      (buffers.length
-        ? buffers.map(b => b.id).join(", ")
-        : "aucun")
+    log(
+      "RNBO.js version: " +
+      (RNBO.version || "inconnue")
+    );
+
+    log(
+      "Output channels: " +
+      (device.node.numberOfOutputs || "?")
     );
 
     renderParameters();
 
+    // Keep the exported parameter in sync with the UI.
+    const speed = device.parametersById(CFG.SPEED_PARAM_ID);
+    if (speed) {
+      els.slowdown.value = speed.value;
+      els.slowdownValue.textContent =
+        formatValue(speed.value) + "×";
+    }
+
     els.start.disabled = false;
     els.random.disabled = false;
-
-    setStatus("Prêt", "ok");
+    setStatus("RNBO prêt", "ok");
   }
 
   async function startAudio() {
     if (!audioContext) return;
+
     await audioContext.resume();
 
     els.start.textContent = "Audio actif";
@@ -332,7 +362,6 @@
   async function newBird() {
     try {
       els.random.disabled = true;
-      setStatus("Recherche d'un oiseau…");
 
       if (audioContext.state !== "running") {
         await audioContext.resume();
@@ -341,31 +370,21 @@
       const recording = await randomRecording();
       renderRecording(recording);
 
-      setStatus("Téléchargement temporaire + décodage…");
+      setStatus("Téléchargement + décodage…");
+      const audioBuffer = await fetchAndDecodeRecording(recording);
 
-      currentAudioBuffer = await fetchAndDecodeRecording(recording);
+      setStatus("Copie dans RNBO…");
+      const bufferId = await loadRecordingIntoRNBO(audioBuffer);
 
-      setStatus("Chargement dans RNBO…");
-      const bufferId = await loadRecordingIntoRNBO(currentAudioBuffer);
-
-      /*
-       * On envoie aussi un message "newbird" si ton patch possède un inport
-       * du même nom. Ce n'est pas nécessaire au fonctionnement du buffer.
-       */
-      try {
-        const message = RNBO.MessageEvent.fromObject({
-          tag: "newbird",
-          payload: [1]
-        });
-        device.scheduleEvent(message);
-      } catch (_) {}
+      // The supplied export declares an inport named "bang".
+      // This is the important correction compared with the previous version.
+      sendBang("bang");
 
       setStatus(`Oiseau chargé — buffer ${bufferId}`, "ok");
-
     } catch (error) {
       console.error(error);
       setStatus("Erreur : " + error.message, "error");
-      logDiagnostic("ERROR: " + error.stack);
+      log("ERROR: " + (error.stack || error.message));
     } finally {
       els.random.disabled = false;
     }
@@ -378,22 +397,14 @@
     const value = Number(els.slowdown.value);
     els.slowdownValue.textContent = value.toFixed(2) + "×";
 
-    /*
-     * IMPORTANT :
-     * Ici on cherche un paramètre RNBO nommé "speed" ou "rate".
-     * Si ton patch utilise un autre nom, change SPEED_PARAM_ID dans config.js
-     * et ajoute-le à la configuration.
-     */
-    const speedParamId = CFG.SPEED_PARAM_ID;
-
-    if (device && speedParamId) {
-      const param = device.parametersById(speedParamId);
+    if (device) {
+      const param = device.parametersById(CFG.SPEED_PARAM_ID);
       if (param) param.value = value;
     }
   });
 
   window.addEventListener("error", event => {
-    logDiagnostic(
+    log(
       "Browser error: " +
       (event.error ? event.error.stack : event.message)
     );
@@ -402,6 +413,6 @@
   initRNBO().catch(error => {
     console.error(error);
     setStatus("RNBO : " + error.message, "error");
-    logDiagnostic(error.stack || error.message);
+    log(error.stack || error.message);
   });
 })();
